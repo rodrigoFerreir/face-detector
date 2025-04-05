@@ -1,5 +1,7 @@
 import os
 import json
+import re
+from turtle import rt
 import cv2 as cv
 from typing import List
 from pathlib import Path
@@ -16,40 +18,61 @@ class FaceRecognition:
 
     @staticmethod
     def execute(image: str):
-        compare_result = []
-        distance_result = None
+        result = []
+        if isinstance(image, str):
+            image = fr.load_image_file(image)
 
-        image = fr.load_image_file(image)
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
         face_location_image = fr.face_locations(image)[0]
         encode_image = fr.face_encodings(image, [face_location_image])[0]
 
-        for image_db in FaceRecognition._load_dataset():
-            print("Carregando imagem:: ", image_db)
+        for image_db_ in FaceRecognition._load_dataset():
+            print("Carregando imagem:: ", image_db_)
 
-            image_db = fr.load_image_file(image_db)
+            image_db = fr.load_image_file(image_db_)
             image_db = cv.cvtColor(image_db, cv.COLOR_BGR2RGB)
             face_location_image_db = fr.face_locations(image)[0]
             face_loc_image_db = fr.face_encodings(image_db, [face_location_image_db])[0]
 
-            compare_result = fr.compare_faces([encode_image], face_loc_image_db)
-            distance_result = fr.face_distance([encode_image], face_loc_image_db)
+            compare_result = fr.compare_faces([encode_image], face_loc_image_db)[0]
+            distance_result = fr.face_distance([encode_image], face_loc_image_db)[0]
+
+            result_person = (
+                image_db_.split("/")[2] if compare_result else "desconhecido"
+            )
+
+            distance_result = (1 - distance_result) * 100
 
             print("Resultado comparação:: ", compare_result)
-            print("Resultado distância:: ", distance_result)
+            print("Resultado distância:: ", distance_result, "%")
+
+            if compare_result:
+
+                result.append(
+                    {
+                        "person": result_person,
+                        "distance": distance_result,
+                        "compare": compare_result,
+                    }
+                )
+
+        return result
 
 
 class ImageProcessor(ABC):
 
+    face_recognition = FaceRecognition()
+
     @abstractmethod
-    def execute(self, *args, **kwargs):
+    def execute(self, *args, **kwargs) -> cv.typing.MatLike:
         pass
 
 
 class FaceDetector(ImageProcessor):
 
     def __init__(self) -> None:
-        self.face_classifier = cv.CascadeClassifier(cv.data.haarcascades + "haarcascade_frontalface_default.xml")  # type: ignore
+        filename = cv.data.haarcascades + "haarcascade_frontalface_default.xml"
+        self.face_classifier = cv.CascadeClassifier(filename)
 
     def execute(self, frame: cv.typing.MatLike):
         gray_image = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
@@ -60,8 +83,21 @@ class FaceDetector(ImageProcessor):
             minSize=(40, 40),
         )
 
+        if len(faces) > 0:
+            result = self.face_recognition.execute(frame)
+
         for x, y, w, h in faces:
             cv.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 4)
+            if len(result) > 0:
+                cv.putText(
+                    frame,
+                    result[0]["person"] + " - " + str(result[0]["distance"]) + "%",
+                    (x, y - 10),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (255, 255, 255),
+                    2,
+                )
 
         return frame
 
@@ -138,11 +174,9 @@ class FilesProcessor:
         self,
         path_images: str,
         instance_process: ImageProcessor,
-        face_recognition: FaceRecognition = None,
     ):
         self.path_images = path_images
         self.instance_process = instance_process
-        self.face_recognition = face_recognition
 
     def execute(self, save_frames: bool = False):
         for file in Path(self.path_images).glob("*.jpg"):
@@ -150,23 +184,16 @@ class FilesProcessor:
             image = cv.imread(image_name)
             image = self.instance_process.execute(image)
 
-            if self.face_recognition:
-                self.face_recognition.execute(image_name)
-
             if save_frames:
-                os.makedirs("result", exist_ok=True)
+                os.makedirs("result/images", exist_ok=True)
                 image_result = os.path.join("result", image_name)
                 cv.imwrite(image_result, image)  # type: ignore
 
 
 def main():
     # process = StreamingProcess(InteligenceDetector())
-    process = FilesProcessor(
-        os.path.join("images"),
-        FaceDetector(),
-        FaceRecognition(),
-    )
-    process.execute(False)
+    process = FilesProcessor(os.path.join("images"), FaceDetector())
+    process.execute(True)
 
 
 if __name__ == "__main__":
